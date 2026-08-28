@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use crate::backend::AccountData;
 use crate::config::expand_tilde;
-use crate::gws::AccountData;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cache {

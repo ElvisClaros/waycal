@@ -181,7 +181,9 @@ pub fn event(app: &Rc<App>, ev: &Event) -> gtk4::Box {
             let Some(account) = app2.account(&account_name) else { return };
             let (cal_id, ev_id, summary) = (cal_id.clone(), ev_id.clone(), summary.clone());
             app2.spawn_mut(move || {
-                crate::gws::delete_event(&account, &cal_id, &ev_id).map(|_| format!("deleted: {summary}"))
+                crate::backend::for_account(&account)
+                    .delete_event(&account, &cal_id, &ev_id)
+                    .map(|_| format!("deleted: {summary}"))
             });
         }));
     }
@@ -238,7 +240,9 @@ pub fn task(app: &Rc<App>, t: &Task) -> gtk4::Box {
         let Some(account) = app2.account(&account_name) else { return };
         let (list_id, task_id, title) = (list_id.clone(), task_id.clone(), title.clone());
         app2.spawn_mut(move || {
-            crate::gws::delete_task(&account, &list_id, &task_id).map(|_| format!("deleted: {title}"))
+            crate::backend::for_account(&account)
+                .delete_task(&account, &list_id, &task_id)
+                .map(|_| format!("deleted: {title}"))
         });
     }));
 

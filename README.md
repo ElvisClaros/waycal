@@ -13,11 +13,12 @@ Written in Rust with GTK4 and `gtk4-layer-shell` so the popup anchors itself to 
 ## Features
 
 - **Month view** with today highlighted, leading/trailing days dimmed
-- **Google Calendar & Tasks** (optional): agenda and task panel for multiple
-  accounts via the [`gws` CLI](https://github.com/googleworkspace/cli) —
-  create/edit/delete events and tasks, complete tasks, join Meet links, plus a
-  notification daemon for reminders and a daily due-task digest. See
-  [Google Calendar & Tasks integration](#google-calendar--tasks-integration)
+- **Calendar & Tasks** (optional): agenda and task panel for multiple
+  accounts — Google via the [`gws` CLI](https://github.com/googleworkspace/cli),
+  Nextcloud via CalDAV (built in, no extra CLI) — create/edit/delete events
+  and tasks, complete tasks, join Meet links (Google), plus a notification
+  daemon for reminders and a daily due-task digest. See
+  [Calendar & Tasks integration](#calendar--tasks-integration)
 - **Keyboard nav:** `←`/`→` month, `↑`/`↓` year, `Enter` today, `s` toggle style, `Esc` close
 - **Two looks:** press `s` to swap between a sharp-cornered, bordered "Omarchy" style and a soft rounded style. Your choice is remembered between launches
 - **Toggle-click:** clicking the Waybar icon while the popup is open closes it
@@ -121,7 +122,7 @@ Without a config file (plain calendar):
 | `s`          | Toggle sharp / rounded style (persisted)   |
 | `Esc` / `q`  | Close the popup                            |
 
-With Google accounts configured (see below), arrow keys move the day selection instead:
+With accounts configured (see below), arrow keys move the day selection instead:
 
 | Key                | Action                                    |
 | ------------------ | ----------------------------------------- |
@@ -136,16 +137,30 @@ With Google accounts configured (see below), arrow keys move the day selection i
 
 Clicking the Waybar icon a second time also closes the popup (the `pkill -x waycal || waycal` command toggles).
 
-## Google Calendar & Tasks integration
+## Calendar & Tasks integration
 
-waycal can show — and edit — events and tasks from one or more Google accounts
-through the [`gws` CLI](https://github.com/googleworkspace/cli). With accounts
+waycal can show — and edit — events and tasks from Google accounts (via the
+[`gws` CLI](https://github.com/googleworkspace/cli)) and/or Nextcloud accounts
+(via CalDAV, built in — no extra CLI or OAuth flow needed). With accounts
 configured, the popup grows a side panel: the selected day's agenda (with
-join-Meet buttons) on top, pending tasks below, and buttons/keys to create,
-edit, delete and complete items. Days with events get a small underline in the
-month grid, and each account gets its own accent color.
+join-Meet buttons on Google events) on top, pending tasks below, and
+buttons/keys to create, edit, delete and complete items. Days with events get
+a small underline in the month grid, and each account gets its own accent
+color. Mix providers freely — each `[[accounts]]` entry picks its own.
 
-Setup:
+All accounts share `~/.config/waycal/config.toml`'s top-level settings:
+
+```toml
+poll_interval_secs = 300        # daemon poll interval
+default_reminder_mins = 10      # fallback when an event has no reminders
+task_digest_time = "09:00"      # daily due-tasks notification; omit to disable
+hide_event_types = ["workingLocation", "birthday"]   # Google pseudo-events only
+```
+
+Without this file, or with it missing `[[accounts]]` entries, waycal behaves
+exactly like the plain calendar above.
+
+### Google Calendar & Tasks
 
 1. Install `gws` and authenticate each account once, e.g.:
 
@@ -156,14 +171,9 @@ Setup:
    gws auth export --unmasked > ~/.config/gws-conf/work-credentials.json
    ```
 
-2. Create `~/.config/waycal/config.toml`:
+2. Add an account block (`provider = "google"` is the default, so it can be omitted):
 
    ```toml
-   poll_interval_secs = 300        # daemon poll interval
-   default_reminder_mins = 10      # fallback when an event has no reminders
-   task_digest_time = "09:00"      # daily due-tasks notification; omit to disable
-   hide_event_types = ["workingLocation", "birthday"]
-
    [[accounts]]
    name = "personal"
    config_dir = "~/.config/gws-personal"
@@ -172,6 +182,7 @@ Setup:
 
    [[accounts]]
    name = "work"
+   provider = "google"
    config_dir = "~/.config/gws-work"
    credentials_file = "~/.config/gws-conf/work-credentials.json"
    color = "#7aa2f7"
@@ -179,7 +190,38 @@ Setup:
 
    `config_dir` and `credentials_file` map to gws' `GOOGLE_WORKSPACE_CLI_CONFIG_DIR`
    and `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` environment variables — one pair per
-   account. Without this file, waycal behaves exactly like the plain calendar above.
+   account.
+
+### Nextcloud (CalDAV)
+
+waycal talks CalDAV directly over HTTPS with HTTP Basic auth — no CLI, no
+OAuth, just an app password.
+
+1. In Nextcloud, go to **Settings → Security → Devices & sessions** and
+   create a new app password. Save it to a file waycal can read:
+
+   ```sh
+   mkdir -p ~/.config/waycal
+   echo -n 'the-generated-app-password' > ~/.config/waycal/nextcloud-app-password
+   chmod 600 ~/.config/waycal/nextcloud-app-password
+   ```
+
+2. Add an account block:
+
+   ```toml
+   [[accounts]]
+   name = "nextcloud"
+   provider = "nextcloud"
+   server_url = "https://cloud.example.com"
+   username = "alice"
+   app_password_file = "~/.config/waycal/nextcloud-app-password"
+   color = "#4A90D9"
+   ```
+
+   Events and task lists both come from your Nextcloud calendars — a
+   calendar shows up as an event source, a task list, or both, depending on
+   what it supports (Nextcloud's default "Personal" calendar supports both).
+   Nothing else to configure.
 
 The popup paints instantly from a local cache (`~/.cache/waycal/`) and refreshes
 in the background. `waycal dump` prints everything it would fetch, for debugging.
@@ -189,9 +231,10 @@ in the background. `waycal dump` prints everything it would fetch, for debugging
 `waycal daemon` is a headless process that polls your accounts and sends
 desktop notifications (via `notify-send`) for:
 
-- **Event reminders**, honoring each event's own reminders and each calendar's
-  default popup reminders, with `default_reminder_mins` as the fallback. The
-  notification body includes the Meet link when there is one.
+- **Event reminders**, honoring each event's own reminders (Google's reminder
+  overrides / calendar defaults, or a Nextcloud event's `VALARM`), with
+  `default_reminder_mins` as the fallback. The notification body includes the
+  Meet link when there is one.
 - **A daily digest** of tasks due (or overdue) today, at `task_digest_time`.
 
 Start it with your session — either Hyprland:

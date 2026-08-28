@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
 use crate::model::parse_hhmm;
-use crate::{cache, gws};
+use crate::{backend, cache};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct State {
@@ -98,7 +98,7 @@ fn tick(cfg: &Config, state: &mut State) {
         ..Default::default()
     };
     for account in &cfg.accounts {
-        let data = gws::fetch_account(account, from, to, &cfg.hide_event_types, &mut errors);
+        let data = backend::for_account(account).fetch_account(account, from, to, &cfg.hide_event_types, &mut errors);
         cache.accounts.insert(account.name.clone(), data);
     }
     for e in &errors {

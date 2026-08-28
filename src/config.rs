@@ -2,17 +2,60 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    #[default]
+    Google,
+    Nextcloud,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Account {
     pub name: String,
-    pub config_dir: String,
-    pub credentials_file: String,
+    #[serde(default)]
+    pub provider: Provider,
     #[serde(default = "default_account_color")]
     pub color: String,
+
+    // Google (gws) — required iff provider = Google.
+    pub config_dir: Option<String>,
+    pub credentials_file: Option<String>,
+
+    // Nextcloud (CalDAV) — required iff provider = Nextcloud. The app
+    // password is read from a file (like `credentials_file`) rather than
+    // stored inline in config.toml.
+    pub server_url: Option<String>,
+    pub username: Option<String>,
+    pub app_password_file: Option<String>,
 }
 
 fn default_account_color() -> String {
     "#8FBC8F".to_string()
+}
+
+/// Checks that each account carries the fields its provider needs. Needed
+/// because those fields are `Option` (shared across providers) rather than
+/// plain required fields serde would reject for free.
+fn validate(accounts: &[Account]) -> Result<(), String> {
+    for a in accounts {
+        let missing = match a.provider {
+            Provider::Google => [("config_dir", &a.config_dir), ("credentials_file", &a.credentials_file)]
+                .into_iter()
+                .find(|(_, v)| v.as_deref().unwrap_or("").is_empty()),
+            Provider::Nextcloud => [
+                ("server_url", &a.server_url),
+                ("username", &a.username),
+                ("app_password_file", &a.app_password_file),
+            ]
+            .into_iter()
+            .find(|(_, v)| v.as_deref().unwrap_or("").is_empty()),
+        };
+        if let Some((field, _)) = missing {
+            return Err(format!("account '{}' (provider={:?}) is missing required field '{field}'", a.name, a.provider));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,10 +125,64 @@ pub fn load() -> Option<Config> {
             eprintln!("waycal: {} has no [[accounts]] — running plain calendar", path.display());
             None
         }
-        Ok(cfg) => Some(cfg),
+        Ok(cfg) => match validate(&cfg.accounts) {
+            Ok(()) => Some(cfg),
+            Err(e) => {
+                eprintln!("waycal: invalid config {}: {}", path.display(), e);
+                None
+            }
+        },
         Err(e) => {
             eprintln!("waycal: invalid config {}: {}", path.display(), e);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn google_only_config_without_provider_key_still_parses() {
+        let toml = r#"
+            [[accounts]]
+            name = "celvisc"
+            config_dir = "~/.config/gws-celvisc"
+            credentials_file = "~/.config/gwc-conf/celvisc-credentials.json"
+        "#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.accounts.len(), 1);
+        assert_eq!(cfg.accounts[0].provider, Provider::Google);
+        assert!(validate(&cfg.accounts).is_ok());
+    }
+
+    #[test]
+    fn nextcloud_account_missing_field_fails_validation() {
+        let toml = r#"
+            [[accounts]]
+            name = "personal-nc"
+            provider = "nextcloud"
+            server_url = "https://cloud.example.com"
+            username = "alice"
+        "#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        let err = validate(&cfg.accounts).unwrap_err();
+        assert!(err.contains("app_password_file"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn complete_nextcloud_account_validates() {
+        let toml = r#"
+            [[accounts]]
+            name = "personal-nc"
+            provider = "nextcloud"
+            server_url = "https://cloud.example.com"
+            username = "alice"
+            app_password_file = "~/.config/waycal/nextcloud-app-password"
+        "#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.accounts[0].provider, Provider::Nextcloud);
+        assert!(validate(&cfg.accounts).is_ok());
     }
 }

@@ -3,12 +3,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use chrono::{Days, Local, NaiveDate, NaiveTime, TimeZone};
+use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
 use gtk4::prelude::*;
-use serde_json::{Map, Value, json};
 
 use super::{App, AppExt, Pane};
-use crate::gws;
+use crate::backend::{self, EventDraft, TaskDraft};
 use crate::model::{Calendar, Event, Task, TaskList};
 
 fn field_row(label: &str, widget: &impl IsA<gtk4::Widget>) -> gtk4::Box {
@@ -248,15 +247,12 @@ pub fn event(app: &Rc<App>, existing: Option<Event>) -> gtk4::Box {
                 return;
             };
 
-            let (start, end) = if all_day.is_active() {
+            let (start_time_dt, end_time_dt) = if all_day.is_active() {
                 if ed < sd {
                     app.set_status("end before start", true);
                     return;
                 }
-                (
-                    json!({"date": sd.format("%Y-%m-%d").to_string()}),
-                    json!({"date": (ed + Days::new(1)).format("%Y-%m-%d").to_string()}),
-                )
+                (None, None)
             } else {
                 let Ok(st) = NaiveTime::parse_from_str(start_time.text().trim(), "%H:%M") else {
                     app.set_status("bad start time (HH:MM)", true);
@@ -277,7 +273,7 @@ pub fn event(app: &Rc<App>, existing: Option<Event>) -> gtk4::Box {
                     app.set_status("end before start", true);
                     return;
                 }
-                (json!({"dateTime": sdt.to_rfc3339()}), json!({"dateTime": edt.to_rfc3339()}))
+                (Some(sdt), Some(edt))
             };
 
             let guest_list: Vec<String> = guests
@@ -292,28 +288,18 @@ pub fn event(app: &Rc<App>, existing: Option<Event>) -> gtk4::Box {
                 return;
             }
 
-            let mut body = Map::new();
-            body.insert("summary".into(), json!(summary));
-            body.insert("start".into(), start);
-            body.insert("end".into(), end);
-            body.insert("location".into(), json!(location.text().trim()));
-            body.insert("description".into(), json!(buffer_text(&desc_view)));
-            // On edit the list replaces the current guests (empty clears them);
-            // on create it's only sent when there are guests.
-            if existing.is_some() || !guest_list.is_empty() {
-                let attendees: Vec<Value> = guest_list.iter().map(|g| json!({"email": g})).collect();
-                body.insert("attendees".into(), json!(attendees));
-            }
-            if existing.is_none() && meet.is_active() {
-                body.insert(
-                    "conferenceData".into(),
-                    json!({"createRequest": {
-                        "requestId": format!("waycal-{}", chrono::Local::now().timestamp_millis()),
-                        "conferenceSolutionKey": {"type": "hangoutsMeet"},
-                    }}),
-                );
-            }
-            let body = Value::Object(body);
+            let draft = EventDraft {
+                summary: summary.clone(),
+                location: location.text().trim().to_string(),
+                description: buffer_text(&desc_view),
+                all_day: all_day.is_active(),
+                start_date: sd,
+                end_date: ed,
+                start_time: start_time_dt,
+                end_time: end_time_dt,
+                attendees: guest_list,
+                add_meet: existing.is_none() && meet.is_active(),
+            };
             let send_updates = notify.is_active();
 
             match &existing {
@@ -321,7 +307,8 @@ pub fn event(app: &Rc<App>, existing: Option<Event>) -> gtk4::Box {
                     let Some(account) = app.account(&ev.account) else { return };
                     let (cal_id, ev_id) = (ev.calendar_id.clone(), ev.id.clone());
                     app.spawn_mut(move || {
-                        gws::patch_event(&account, &cal_id, &ev_id, &body, send_updates)
+                        backend::for_account(&account)
+                            .patch_event(&account, &cal_id, &ev_id, &draft, send_updates)
                             .map(|_| format!("saved: {summary}"))
                     });
                 }
@@ -334,7 +321,8 @@ pub fn event(app: &Rc<App>, existing: Option<Event>) -> gtk4::Box {
                         return;
                     };
                     app.spawn_mut(move || {
-                        gws::insert_event(&account, &cal.id, &body, send_updates)
+                        backend::for_account(&account)
+                            .insert_event(&account, &cal.id, &draft, send_updates)
                             .map(|_| format!("created: {summary}"))
                     });
                 }
@@ -452,7 +440,7 @@ pub fn task(app: &Rc<App>, existing: Option<Task>) -> gtk4::Box {
                 None
             } else {
                 match NaiveDate::parse_from_str(&due_raw, "%Y-%m-%d") {
-                    Ok(d) => Some(json!(format!("{}T00:00:00.000Z", d.format("%Y-%m-%d")))),
+                    Ok(d) => Some(d),
                     Err(_) => {
                         app.set_status("bad due date (YYYY-MM-DD)", true);
                         return;
@@ -460,31 +448,19 @@ pub fn task(app: &Rc<App>, existing: Option<Task>) -> gtk4::Box {
                 }
             };
 
-            // gws rejects explicit nulls, so empty fields are omitted; edits
-            // go through `update` (full replace) where omission clears them.
-            let mut body = Map::new();
-            body.insert("title".into(), json!(text));
-            let notes = buffer_text(&notes_view);
-            if !notes.is_empty() {
-                body.insert("notes".into(), json!(notes));
-            }
-            if let Some(due) = due_value {
-                body.insert("due".into(), due);
-            }
+            let draft = TaskDraft { title: text.clone(), notes: buffer_text(&notes_view), due: due_value };
 
             match &existing {
                 Some(t) => {
-                    body.insert("id".into(), json!(t.id));
-                    body.insert("status".into(), json!("needsAction"));
-                    let body = Value::Object(body);
                     let Some(account) = app.account(&t.account) else { return };
                     let (list_id, task_id) = (t.tasklist_id.clone(), t.id.clone());
                     app.spawn_mut(move || {
-                        gws::update_task(&account, &list_id, &task_id, &body).map(|_| format!("saved: {text}"))
+                        backend::for_account(&account)
+                            .update_task(&account, &list_id, &task_id, &draft)
+                            .map(|_| format!("saved: {text}"))
                     });
                 }
                 None => {
-                    let body = Value::Object(body);
                     let idx = account_dd.as_ref().map(|d| d.selected() as usize).unwrap_or(0);
                     let Some(account) = app.cfg.accounts.get(idx).cloned() else { return };
                     let list_idx = list_dd.as_ref().map(|d| d.selected() as usize).unwrap_or(0);
@@ -493,7 +469,9 @@ pub fn task(app: &Rc<App>, existing: Option<Task>) -> gtk4::Box {
                         return;
                     };
                     app.spawn_mut(move || {
-                        gws::insert_task(&account, &list.id, &body).map(|_| format!("created: {text}"))
+                        backend::for_account(&account)
+                            .insert_task(&account, &list.id, &draft)
+                            .map(|_| format!("created: {text}"))
                     });
                 }
             }

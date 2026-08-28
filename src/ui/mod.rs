@@ -14,9 +14,9 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+use crate::backend::{self, AccountData};
 use crate::cache::{self, Cache};
 use crate::config::{self, Account, Config};
-use crate::gws::{self, AccountData};
 use crate::model::{Event, Task};
 
 const APP_ID: &str = "com.forrestknight.waycal";
@@ -423,7 +423,7 @@ impl AppExt for Rc<App> {
             let hide = self.cfg.hide_event_types.clone();
             std::thread::spawn(move || {
                 let mut errors = Vec::new();
-                let data = gws::fetch_account(&account, from, to, &hide, &mut errors);
+                let data = backend::for_account(&account).fetch_account(&account, from, to, &hide, &mut errors);
                 let _ = tx.send_blocking(Msg::Fetched { account: account.name, data, from, to, errors });
             });
         }

@@ -11,10 +11,16 @@ readme = "README.md"
 gtk4 = { version = "0.9", features = ["v4_12"] }
 gtk4-layer-shell = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono-tz = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 async-channel = "2"
+attohttpc = { version = "0.31", default-features = false, features = ["tls-rustls-webpki-roots"] }
+roxmltree = "0.21"
+ical = { version = "0.11", default-features = false, features = ["ical"] }
+base64 = "0.23"
+uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 lto = true

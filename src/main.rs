@@ -1,4 +1,6 @@
+mod backend;
 mod cache;
+mod caldav;
 mod config;
 mod daemon;
 mod gws;
@@ -30,7 +32,7 @@ fn dump() {
     let to = today + chrono::Days::new(45);
     let mut errors = Vec::new();
     for account in &cfg.accounts {
-        let data = gws::fetch_account(account, from, to, &cfg.hide_event_types, &mut errors);
+        let data = backend::for_account(account).fetch_account(account, from, to, &cfg.hide_event_types, &mut errors);
         println!(
             "== {} — {} calendars, {} events, {} tasklists, {} tasks",
             account.name,

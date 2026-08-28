@@ -183,7 +183,8 @@ pub fn complete(app: &Rc<App>, task: &Task) {
     let Some(account) = app.account(&task.account) else { return };
     let (list_id, task_id, title) = (task.tasklist_id.clone(), task.id.clone(), task.title.clone());
     app.spawn_mut(move || {
-        crate::gws::complete_task(&account, &list_id, &task_id)
+        crate::backend::for_account(&account)
+            .complete_task(&account, &list_id, &task_id)
             .map(|_| format!("completed: {title}"))
     });
 }
