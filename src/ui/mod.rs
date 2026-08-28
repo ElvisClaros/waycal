@@ -26,16 +26,16 @@ window.waycal {
     background: transparent;
 }
 .waycal-root {
-    background-color: #1a2125;
-    border: 2px solid #8FBC8F;
+    background-color: @waycal-bg;
+    border: 2px solid @waycal-accent;
     border-radius: 0;
     padding: 14px 18px;
-    color: #c9d1d9;
+    color: @waycal-text;
     font-family: "CaskaydiaMono Nerd Font", monospace;
     font-size: 13px;
 }
 .waycal-root.rounded {
-    background-color: rgba(26, 33, 37, 0.96);
+    background-color: alpha(@waycal-bg, 0.96);
     border: 2px solid transparent;
     border-radius: 16px;
 }
@@ -45,7 +45,7 @@ window.waycal {
     padding-bottom: 6px;
 }
 .waycal-weekday {
-    color: #8FBC8F;
+    color: @waycal-accent;
     font-weight: bold;
     padding: 2px 6px;
 }
@@ -58,14 +58,14 @@ window.waycal {
     opacity: 0.3;
 }
 .waycal-day.busy {
-    border-bottom-color: rgba(143, 188, 143, 0.55);
+    border-bottom-color: alpha(@waycal-accent, 0.55);
 }
 .waycal-day.selected {
-    background-color: rgba(143, 188, 143, 0.22);
+    background-color: alpha(@waycal-accent, 0.22);
 }
 .waycal-day.today {
-    background-color: #8FBC8F;
-    color: #1a2125;
+    background-color: @waycal-accent;
+    color: @waycal-bg;
     border-radius: 0;
     font-weight: bold;
 }
@@ -74,27 +74,27 @@ window.waycal {
     border-radius: 8px;
 }
 .waycal-footer {
-    color: #6a7a71;
+    color: @waycal-dim;
     font-size: 10px;
     padding-top: 8px;
     margin-top: 6px;
-    border-top: 1px solid rgba(143, 188, 143, 0.18);
+    border-top: 1px solid alpha(@waycal-accent, 0.18);
 }
 .waycal-side {
     min-width: 320px;
 }
 .waycal-side separator {
-    background: rgba(143, 188, 143, 0.18);
+    background: alpha(@waycal-accent, 0.18);
     min-height: 1px;
     margin: 4px 0;
 }
 .waycal-vsep {
-    background: rgba(143, 188, 143, 0.18);
+    background: alpha(@waycal-accent, 0.18);
     min-width: 1px;
     margin: 0 6px;
 }
 .waycal-section {
-    color: #8FBC8F;
+    color: @waycal-accent;
     font-weight: bold;
     font-size: 12px;
 }
@@ -103,26 +103,26 @@ window.waycal {
     font-size: 14px;
 }
 .waycal-dim {
-    color: #6a7a71;
+    color: @waycal-dim;
     font-size: 11px;
 }
 .waycal-overdue {
-    color: #e06c75;
+    color: @waycal-error;
 }
 .waycal-ok {
-    color: #8FBC8F;
+    color: @waycal-accent;
 }
 .waycal-error {
-    color: #e06c75;
+    color: @waycal-error;
 }
 .waycal-meet {
-    color: #8FBC8F;
+    color: @waycal-accent;
     font-size: 10px;
-    border: 1px solid rgba(143, 188, 143, 0.4);
+    border: 1px solid alpha(@waycal-accent, 0.4);
     padding: 0 4px;
 }
 .waycal-status {
-    color: #6a7a71;
+    color: @waycal-dim;
     font-size: 10px;
     padding-top: 4px;
 }
@@ -131,7 +131,7 @@ window.waycal {
     padding: 0;
 }
 .waycal-list row:hover {
-    background: rgba(143, 188, 143, 0.10);
+    background: alpha(@waycal-accent, 0.10);
 }
 .waycal-item {
     padding: 3px 4px;
@@ -140,53 +140,53 @@ window.waycal {
     background: transparent;
 }
 .waycal-side button {
-    background: rgba(143, 188, 143, 0.12);
-    border: 1px solid rgba(143, 188, 143, 0.4);
+    background: alpha(@waycal-accent, 0.12);
+    border: 1px solid alpha(@waycal-accent, 0.4);
     border-radius: 0;
     box-shadow: none;
-    color: #c9d1d9;
+    color: @waycal-text;
     font-size: 11px;
     min-height: 0;
     padding: 2px 10px;
 }
 .waycal-side button:hover {
-    background: rgba(143, 188, 143, 0.25);
+    background: alpha(@waycal-accent, 0.25);
 }
 .waycal-side button.destructive {
-    border-color: rgba(224, 108, 117, 0.6);
-    color: #e06c75;
+    border-color: alpha(@waycal-error, 0.6);
+    color: @waycal-error;
 }
 .waycal-root.rounded .waycal-side button {
     border-radius: 8px;
 }
 .waycal-side checkbutton check {
-    background: #232c31;
-    border: 1px solid rgba(143, 188, 143, 0.5);
+    background: @waycal-input-bg;
+    border: 1px solid alpha(@waycal-accent, 0.5);
     min-width: 12px;
     min-height: 12px;
     -gtk-icon-size: 10px;
 }
 .waycal-side checkbutton check:checked {
-    background: #8FBC8F;
-    color: #1a2125;
+    background: @waycal-accent;
+    color: @waycal-bg;
 }
 .waycal-side entry {
-    background: #232c31;
-    border: 1px solid rgba(143, 188, 143, 0.3);
+    background: @waycal-input-bg;
+    border: 1px solid alpha(@waycal-accent, 0.3);
     border-radius: 0;
     box-shadow: none;
-    color: #c9d1d9;
+    color: @waycal-text;
     font-size: 12px;
     min-height: 0;
     padding: 3px 6px;
-    caret-color: #8FBC8F;
+    caret-color: @waycal-accent;
 }
 .waycal-root.rounded .waycal-side entry {
     border-radius: 6px;
 }
 .waycal-side textview, .waycal-side textview text {
-    background: #232c31;
-    color: #c9d1d9;
+    background: @waycal-input-bg;
+    color: @waycal-text;
     font-size: 12px;
 }
 .waycal-side dropdown button {
@@ -461,7 +461,16 @@ pub fn run() {
 }
 
 fn load_css(cfg: Option<&Config>) {
-    let mut css = CSS.to_string();
+    let theme = cfg.map(|c| &c.theme).cloned().unwrap_or_default();
+    let mut css = format!(
+        "@define-color waycal-bg {};\n\
+         @define-color waycal-input-bg {};\n\
+         @define-color waycal-text {};\n\
+         @define-color waycal-dim {};\n\
+         @define-color waycal-accent {};\n\
+         @define-color waycal-error {};\n{CSS}",
+        theme.background, theme.input_background, theme.text, theme.dim_text, theme.accent, theme.error,
+    );
     if let Some(cfg) = cfg {
         for (i, account) in cfg.accounts.iter().enumerate() {
             css.push_str(&format!(".acct-{i} {{ color: {}; }}\n", account.color));

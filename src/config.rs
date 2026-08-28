@@ -70,7 +70,35 @@ pub struct Config {
     #[serde(default = "default_hidden_event_types")]
     pub hide_event_types: Vec<String>,
     #[serde(default)]
+    pub theme: Theme,
+    #[serde(default)]
     pub accounts: Vec<Account>,
+}
+
+/// App-wide colors. Any CSS color syntax works (hex, `rgb()`, named colors)
+/// since these are injected as GTK CSS `@define-color` values.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    pub background: String,
+    pub input_background: String,
+    pub text: String,
+    pub dim_text: String,
+    pub accent: String,
+    pub error: String,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            background: "#1a2125".to_string(),
+            input_background: "#232c31".to_string(),
+            text: "#c9d1d9".to_string(),
+            dim_text: "#6a7a71".to_string(),
+            accent: "#8FBC8F".to_string(),
+            error: "#e06c75".to_string(),
+        }
+    }
 }
 
 fn default_poll_interval() -> u64 {
