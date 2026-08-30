@@ -1,7 +1,7 @@
 //! Headless notification daemon: polls both accounts, fires desktop
 //! notifications for Google event reminders and a daily due-task digest.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -9,7 +9,7 @@ use chrono::{DateTime, Days, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
-use crate::model::parse_hhmm;
+use crate::model::{self, Task, parse_hhmm};
 use crate::{backend, cache};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -19,6 +19,20 @@ struct State {
     notified: BTreeMap<String, DateTime<Local>>,
     #[serde(default)]
     digest_date: Option<NaiveDate>,
+    /// Every task id ever observed. Used to fire a live notification the first
+    /// time a *new* task appears already due (e.g. one just created on the
+    /// phone), without re-pinging tasks that merely roll into "today" at
+    /// midnight — those go through the morning digest instead. Grows by union
+    /// (never pruned) so a completed task, or a transient fetch failure, can't
+    /// make an id look new again.
+    #[serde(default)]
+    seen_tasks: BTreeSet<String>,
+    /// Set once the pre-existing task backlog has been seeded into `seen_tasks`
+    /// (on a fully-successful fetch), so live notifications start only for
+    /// tasks created afterwards. A persistent flag rather than "is seen_tasks
+    /// empty?" so a user with zero tasks still gets pinged on their first one.
+    #[serde(default)]
+    tasks_seeded: bool,
 }
 
 fn state_path() -> PathBuf {
@@ -158,23 +172,82 @@ fn tick(cfg: &Config, state: &mut State) {
         }
     }
 
-    // Morning digest of tasks due (or overdue) today.
+    // Timed task reminders: CalDAV tasks carrying a due *time* (and possibly
+    // an RRULE) fire at that instant, like events — the recurrence is expanded
+    // onto today. Deduped per occurrence date so a daily task rings once a day;
+    // if the machine was off at the time, it fires once on the next poll.
+    for t in cache.accounts.values().flat_map(|d| d.tasks.iter()) {
+        let Some(due_time) = t.due_time else { continue };
+        if t.completed || !model::task_occurs_on(due_time.date_naive(), t.rrule.as_deref(), today) {
+            continue;
+        }
+        let Some(occ) = today.and_time(due_time.time()).and_local_timezone(Local).single() else { continue };
+        if occ > now {
+            continue; // not time yet
+        }
+        let key = format!("task:{}@{}", t.id, today);
+        if state.notified.contains_key(&key) {
+            continue;
+        }
+        notify(
+            &format!("{} {}", occ.format("%H:%M"), t.title),
+            &format!("{} \u{00B7} {}", t.account, t.tasklist_title),
+            None,
+        );
+        state.notified.insert(key, occ);
+    }
+
+    // Whether a *date-only* task (no due time) is actionable today — occurs
+    // today per its RRULE, or (non-recurring) is due on/before today. Timed
+    // tasks are excluded here; the block above owns them.
+    let due_today = |t: &Task| -> bool {
+        t.due_time.is_none()
+            && t.due.is_some_and(|dd| match t.rrule.as_deref() {
+                Some(rr) => model::task_occurs_on(dd, Some(rr), today),
+                None => dd <= today,
+            })
+    };
+    let overdue = |t: &Task| -> bool { t.rrule.is_none() && t.due.is_some_and(|dd| dd < today) };
+
+    // Live heads-up: ping once when a *new* date-only task shows up already due
+    // (typically one just created on the phone). Dedup by task identity, not by
+    // day, so pre-existing tasks rolling into "today" stay silent here and go
+    // through the morning digest. Opt-out via `task_live_notify`.
+    let seeding = !state.tasks_seeded;
+    for t in cache.accounts.values().flat_map(|d| d.tasks.iter()) {
+        if !state.seen_tasks.insert(t.id.clone()) {
+            continue; // already known — not a newly appeared task
+        }
+        if seeding || !cfg.task_live_notify || t.completed || t.due_time.is_some() || !due_today(t) {
+            continue; // seeding, disabled, done, timed (handled above), or not due
+        }
+        notify(
+            &format!("Task {}: {}", if overdue(t) { "vencida" } else { "para hoy" }, t.title),
+            &format!("{} \u{00B7} {}", t.account, t.tasklist_title),
+            None,
+        );
+    }
+    // Only close seeding on a clean fetch, so a partial failure doesn't leave
+    // an account's backlog to surface as "new" (a flood) once it recovers.
+    if seeding && errors.is_empty() {
+        state.tasks_seeded = true;
+    }
+
+    // Morning digest of date-only tasks due today (timed ones get their own
+    // reminder above, so they're left out to avoid a redundant listing).
     if let Some(digest_at) = cfg.task_digest_time.as_deref().and_then(parse_hhmm)
         && now.time() >= digest_at && state.digest_date != Some(today) {
             let mut due: Vec<_> = cache
                 .accounts
                 .values()
                 .flat_map(|d| d.tasks.iter())
-                .filter(|t| !t.completed && t.due.is_some_and(|d| d <= today))
+                .filter(|t| !t.completed && due_today(t))
                 .collect();
             due.sort_by_key(|t| (t.due, t.title.clone()));
             if !due.is_empty() {
                 let body: Vec<String> = due
                     .iter()
-                    .map(|t| {
-                        let overdue = t.due.is_some_and(|d| d < today);
-                        format!("\u{2022} {}{} ({})", t.title, if overdue { " (overdue)" } else { "" }, t.account)
-                    })
+                    .map(|t| format!("\u{2022} {}{} ({})", t.title, if overdue(t) { " (overdue)" } else { "" }, t.account))
                     .collect();
                 notify(&format!("{} task(s) due today", due.len()), &body.join("\n"), None);
             }

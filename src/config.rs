@@ -67,6 +67,11 @@ pub struct Config {
     /// "HH:MM" local time for the daily task digest; None disables it.
     #[serde(default)]
     pub task_digest_time: Option<String>,
+    /// Per-task heads-up when a *date-only* task (no due time, e.g. Google)
+    /// first appears already due. Timed tasks (CalDAV with a due time) always
+    /// notify at their time regardless of this. Default on.
+    #[serde(default = "default_true")]
+    pub task_live_notify: bool,
     #[serde(default = "default_hidden_event_types")]
     pub hide_event_types: Vec<String>,
     #[serde(default)]
@@ -103,6 +108,10 @@ impl Default for Theme {
 
 fn default_poll_interval() -> u64 {
     300
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_reminder_mins() -> i64 {

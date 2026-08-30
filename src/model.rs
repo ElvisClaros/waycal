@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc, Weekday};
 use chrono_tz::Tz;
 use ical::parser::ical::component::{IcalAlarm, IcalEvent, IcalTodo};
 use ical::property::Property;
@@ -407,6 +407,15 @@ pub struct Task {
     pub notes: Option<String>,
     /// Google Tasks due dates carry no meaningful time component.
     pub due: Option<NaiveDate>,
+    /// CalDAV VTODOs can carry a due *time* (Google can't). When present, the
+    /// daemon fires the reminder at this instant instead of the date-only
+    /// "due today" heads-up. `due` still holds the date for digests/filters.
+    #[serde(default)]
+    pub due_time: Option<DateTime<Local>>,
+    /// Raw RRULE (e.g. "FREQ=DAILY;UNTIL=..."), None if the task isn't
+    /// recurring. Anchored on `due`. See [`task_occurs_on`].
+    #[serde(default)]
+    pub rrule: Option<String>,
     pub completed: bool,
 }
 
@@ -435,13 +444,24 @@ impl Task {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
             due,
+            // Google Tasks has no due time and no recurrence exposed via the API.
+            due_time: None,
+            rrule: None,
             completed: v.get("status").and_then(Value::as_str) == Some("completed"),
         })
     }
 
     /// Builds a task from a parsed CalDAV VTODO. `href` becomes `id`.
     pub fn from_ical(account: &str, tasklist_id: &str, tasklist_title: &str, href: &str, todo: &IcalTodo) -> Option<Self> {
-        let due = ical_prop(&todo.properties, "DUE").and_then(parse_ical_moment).map(|(d, _)| d);
+        // A VTODO may anchor recurrence on DUE or DTSTART; prefer DUE (when
+        // it's due), falling back to DTSTART so a start-only task still has a
+        // date. `due_time` is kept only when the moment carried a time of day.
+        let moment = ical_prop(&todo.properties, "DUE")
+            .or_else(|| ical_prop(&todo.properties, "DTSTART"))
+            .and_then(parse_ical_moment);
+        let due = moment.map(|(d, _)| d);
+        let due_time = moment.and_then(|(_, t)| t);
+        let rrule = ical_value(&todo.properties, "RRULE").map(str::to_string);
         Some(Self {
             account: account.to_string(),
             tasklist_id: tasklist_id.to_string(),
@@ -457,10 +477,86 @@ impl Task {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             due,
+            due_time,
+            rrule,
             completed: ical_value(&todo.properties, "STATUS") == Some("COMPLETED")
                 || ical_prop(&todo.properties, "COMPLETED").is_some(),
         })
     }
+}
+
+/// Whether a task recurring by `rrule` (anchored on `anchor`) has an
+/// occurrence on `target`. `rrule = None` means non-recurring: the task
+/// occurs only on `anchor`. Supports the common FREQ=DAILY / FREQ=WEEKLY
+/// (with INTERVAL, UNTIL, COUNT, BYDAY) shapes; unsupported frequencies
+/// (MONTHLY/YEARLY) conservatively match only the anchor date.
+pub fn task_occurs_on(anchor: NaiveDate, rrule: Option<&str>, target: NaiveDate) -> bool {
+    let Some(rrule) = rrule else { return anchor == target };
+    if target < anchor {
+        return false;
+    }
+    let mut parts = std::collections::HashMap::new();
+    for kv in rrule.split(';') {
+        if let Some((k, v)) = kv.split_once('=') {
+            parts.insert(k.trim().to_ascii_uppercase(), v.trim().to_string());
+        }
+    }
+    let interval = parts.get("INTERVAL").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1).max(1);
+    // UNTIL is a date or date-time (possibly Z-suffixed); the first 8 chars are the date.
+    if let Some(until) = parts.get("UNTIL").and_then(|u| u.get(0..8)).and_then(|s| NaiveDate::parse_from_str(s, "%Y%m%d").ok())
+        && target > until
+    {
+        return false;
+    }
+    let count = parts.get("COUNT").and_then(|s| s.parse::<i64>().ok());
+    match parts.get("FREQ").map(String::as_str) {
+        Some("DAILY") => {
+            let days = (target - anchor).num_days();
+            days % interval == 0 && count.map_or(true, |c| days / interval < c)
+        }
+        Some("WEEKLY") => {
+            let weekdays: Vec<Weekday> = match parts.get("BYDAY") {
+                Some(by) => by.split(',').filter_map(parse_ical_weekday).collect(),
+                None => vec![anchor.weekday()],
+            };
+            if !weekdays.contains(&target.weekday()) {
+                return false;
+            }
+            let week_start = |d: NaiveDate| d - chrono::Duration::days(d.weekday().num_days_from_monday() as i64);
+            let weeks = (week_start(target) - week_start(anchor)).num_days() / 7;
+            if weeks % interval != 0 {
+                return false;
+            }
+            // COUNT for weekly: count occurrences from the anchor up to `target`.
+            count.map_or(true, |c| {
+                let mut seen = 0i64;
+                let mut d = anchor;
+                while d <= target {
+                    if weekdays.contains(&d.weekday())
+                        && (week_start(d) - week_start(anchor)).num_days() / 7 % interval == 0
+                    {
+                        seen += 1;
+                    }
+                    d += chrono::Duration::days(1);
+                }
+                seen <= c
+            })
+        }
+        _ => anchor == target,
+    }
+}
+
+fn parse_ical_weekday(s: &str) -> Option<Weekday> {
+    Some(match s.trim().to_ascii_uppercase().as_str() {
+        "MO" => Weekday::Mon,
+        "TU" => Weekday::Tue,
+        "WE" => Weekday::Wed,
+        "TH" => Weekday::Thu,
+        "FR" => Weekday::Fri,
+        "SA" => Weekday::Sat,
+        "SU" => Weekday::Sun,
+        _ => return None,
+    })
 }
 
 /// Parses "HH:MM" into a NaiveTime (used for task_digest_time).
@@ -482,6 +578,53 @@ mod tests {
         let full = format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{vtodo}END:VCALENDAR\r\n");
         let mut parser = ical::IcalParser::new(std::io::Cursor::new(full.as_bytes()));
         parser.next().unwrap().unwrap().todos.into_iter().next().unwrap()
+    }
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn vtodo_captures_due_time_and_rrule() {
+        let todo = parse_todo(
+            "BEGIN:VTODO\r\nUID:x\r\nSUMMARY:Ponerse Flutivent\r\n\
+             DUE;TZID=America/Argentina/Buenos_Aires:20260831T222000\r\n\
+             RRULE:FREQ=DAILY;UNTIL=20270101T035959Z\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n",
+        );
+        let t = Task::from_ical("nc", "list", "List", "/x.ics", &todo).unwrap();
+        assert_eq!(t.due, Some(d(2026, 8, 31)));
+        assert_eq!(t.due_time.unwrap().naive_local(), d(2026, 8, 31).and_hms_opt(22, 20, 0).unwrap());
+        assert_eq!(t.rrule.as_deref(), Some("FREQ=DAILY;UNTIL=20270101T035959Z"));
+    }
+
+    #[test]
+    fn daily_recurrence_occurs_each_day_until_bound() {
+        let rr = Some("FREQ=DAILY;UNTIL=20270101T035959Z");
+        let anchor = d(2026, 8, 31);
+        assert!(task_occurs_on(anchor, rr, d(2026, 8, 31))); // anchor
+        assert!(task_occurs_on(anchor, rr, d(2026, 9, 15))); // mid-run
+        assert!(task_occurs_on(anchor, rr, d(2026, 12, 31))); // last day
+        assert!(!task_occurs_on(anchor, rr, d(2026, 8, 30))); // before anchor
+        assert!(!task_occurs_on(anchor, rr, d(2027, 1, 2))); // past UNTIL
+    }
+
+    #[test]
+    fn interval_and_count_and_weekly() {
+        // Every 2 days from Aug 31: Aug 31 yes, Sep 1 no, Sep 2 yes.
+        let every2 = Some("FREQ=DAILY;INTERVAL=2");
+        assert!(task_occurs_on(d(2026, 8, 31), every2, d(2026, 9, 2)));
+        assert!(!task_occurs_on(d(2026, 8, 31), every2, d(2026, 9, 1)));
+        // COUNT=3 daily from Aug 31 -> Aug 31, Sep 1, Sep 2 only.
+        let count3 = Some("FREQ=DAILY;COUNT=3");
+        assert!(task_occurs_on(d(2026, 8, 31), count3, d(2026, 9, 2)));
+        assert!(!task_occurs_on(d(2026, 8, 31), count3, d(2026, 9, 3)));
+        // Weekly on Mon/Wed (Aug 31 2026 is a Monday).
+        let mw = Some("FREQ=WEEKLY;BYDAY=MO,WE");
+        assert!(task_occurs_on(d(2026, 8, 31), mw, d(2026, 9, 2))); // Wed
+        assert!(!task_occurs_on(d(2026, 8, 31), mw, d(2026, 9, 1))); // Tue
+        // Non-recurring: only the anchor date.
+        assert!(task_occurs_on(d(2026, 8, 31), None, d(2026, 8, 31)));
+        assert!(!task_occurs_on(d(2026, 8, 31), None, d(2026, 9, 1)));
     }
 
     #[test]
